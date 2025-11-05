@@ -1,3 +1,4 @@
+// routes/auth.go
 package routes
 
 import (
@@ -6,9 +7,17 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// RegisterAuthRoutes mounts auth-related endpoints under the provided router
+// RegisterAuthRoutes mounts auth-related endpoints
 func RegisterAuthRoutes(r *mux.Router, h *handlers.AuthHandler) {
+	// OAuth routes
 	r.HandleFunc("/{provider}/callback", h.GetAuthCallback).Methods("GET")
 	r.HandleFunc("/{provider}", h.GetAuth).Methods("GET")
-	r.HandleFunc("/{provider}/logout", h.Logout).Methods("GET")
+
+	// Email/Password routes
+	r.HandleFunc("/register", h.Register).Methods("POST")
+	r.HandleFunc("/login", h.Login).Methods("POST")
+	r.HandleFunc("/logout", h.Logout).Methods("POST")
+
+	// User info
+	r.HandleFunc("/me", h.GetUser).Methods("GET")
 }

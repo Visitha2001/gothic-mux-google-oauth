@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 
 	"list-of-maldives/internal/database"
+	"list-of-maldives/internal/server/models"
 )
 
 type Server struct {
@@ -24,6 +26,14 @@ func NewServer() *http.Server {
 		port: port,
 
 		db: database.New(),
+	}
+
+	// Migrate models
+	User := models.User{}
+	if err := NewServer.db.GormDB().AutoMigrate(&User); err != nil {
+		log.Fatalf("failed to migrate User: %v", err)
+	} else {
+		log.Println("User migrated successfully")
 	}
 
 	// Declare Server config

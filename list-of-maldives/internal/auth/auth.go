@@ -23,8 +23,9 @@ func NewAuth() error {
 		log.Fatal("Error loading .env file")
 	}
 
-	googleClientId := os.Getenv("GOOGLE_CLIENT_ID")
-	googleClientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+	googleClientId := os.Getenv("GOOGLE_KEY")
+	googleClientSecret := os.Getenv("GOOGLE_SECRET")
+	backendURL := os.Getenv("BACKEND_URL")
 
 	store := sessions.NewCookieStore([]byte(key))
 	store.MaxAge(MaxAge)
@@ -35,7 +36,12 @@ func NewAuth() error {
 
 	gothic.Store = store
 	goth.UseProviders(
-		google.New(googleClientId, googleClientSecret, "http://localhost:8082/auth/google/callback"),
+		google.New(
+			googleClientId,
+			googleClientSecret,
+			backendURL+"/auth/google/callback",
+			"email", "profile",
+		),
 	)
 	return nil
 }
