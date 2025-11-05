@@ -1,24 +1,62 @@
+// handlers/auth_handler.go
 package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"list-of-maldives/internal/auth"
 	"list-of-maldives/internal/database"
+	"list-of-maldives/internal/server/models"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/markbates/goth/gothic"
 )
 
 type AuthHandler struct {
-	db database.Service
+	db         database.Service
+	jwtService *auth.JWTService
 }
 
-func NewAuthHandler(db database.Service) *AuthHandler {
-	return &AuthHandler{db: db}
+func NewAuthHandler(db database.Service, jwtService *auth.JWTService) *AuthHandler {
+	return &AuthHandler{
+		db:         db,
+		jwtService: jwtService,
+	}
 }
 
+// Request and Response structures
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type RegisterRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Nickname string `json:"nickname"`
+}
+
+type AuthResponse struct {
+	Token string       `json:"token,omitempty"`
+	User  *models.User `json:"user"`
+}
+
+// GetAuth initiates OAuth authentication flow
+func (h *AuthHandler) GetAuth(w http.ResponseWriter, r *http.Request) {
+	provider := mux.Vars(r)["provider"]
+
+	// Set the provider in the context for Gothic
+	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
+
+	// Begin the OAuth authentication process
+	gothic.BeginAuthHandler(w, r)
+}
+
+// GetAuthCallback handles OAuth callback and creates user in DB
 func (h *AuthHandler) GetAuthCallback(w http.ResponseWriter, r *http.Request) {
 	provider := mux.Vars(r)["provider"]
 
@@ -30,26 +68,195 @@ func (h *AuthHandler) GetAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("Successfully authenticated user: %+v\n", user)
-	http.Redirect(w, r, os.Getenv("FRONTEND_URL"), http.StatusSeeOther)
-}
-
-func (h *AuthHandler) GetAuth(w http.ResponseWriter, r *http.Request) {
-	provider := mux.Vars(r)["provider"]
-
-	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
-
-	gothic.BeginAuthHandler(w, r)
-}
-
-func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	provider := mux.Vars(r)["provider"]
-	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
-	err := gothic.Logout(w, r)
+	// Find or create user in database
+	dbUser, err := models.FindOrCreateByProvider(h.db, provider, user.UserID, user.Email, user.NickName)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error during logout: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Error creating user: %v", err), http.StatusInternalServerError)
+		return
+	}
+	fmt.Println("User created:", dbUser)
+
+	// Generate JWT token for OAuth user
+	token, err := h.jwtService.GenerateToken(dbUser.UUID, dbUser.Email)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
-	http.Redirect(w, r, os.Getenv("FRONTEND_URL"), http.StatusSeeOther)
+	// Set HTTP-only cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   os.Getenv("ENVIRONMENT") == "production",
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(24 * time.Hour),
+	})
+
+	// Redirect to frontend with success
+	frontendURL := os.Getenv("FRONTEND_URL")
+	http.Redirect(w, r, frontendURL+"?auth=success", http.StatusSeeOther)
+}
+
+// Register handles email/password registration
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "Email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	user, err := models.CreateUser(h.db, req.Email, req.Password, req.Nickname)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create user: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Generate JWT token
+	token, err := h.jwtService.GenerateToken(user.UUID, user.Email)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	// Set HTTP-only cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   os.Getenv("ENVIRONMENT") == "production",
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(24 * time.Hour),
+	})
+
+	response := AuthResponse{
+		Token: token,
+		User:  user,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Login handles email/password login
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "Email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	user, err := models.FindByEmail(h.db, req.Email)
+	if err != nil {
+		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		return
+	}
+
+	if user.Provider != "email" {
+		http.Error(w, "Please use the correct login method", http.StatusUnauthorized)
+		return
+	}
+
+	if !user.CheckPassword(req.Password) {
+		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		return
+	}
+
+	// Generate JWT token
+	token, err := h.jwtService.GenerateToken(user.UUID, user.Email)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	// Set HTTP-only cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   os.Getenv("ENVIRONMENT") == "production",
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(24 * time.Hour),
+	})
+
+	response := AuthResponse{
+		Token: token,
+		User:  user,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Logout handles user logout
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	// Clear the auth cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   os.Getenv("ENVIRONMENT") == "production",
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(-time.Hour),
+	})
+
+	// Also handle OAuth logout if provider is specified
+	provider := mux.Vars(r)["provider"]
+	if provider != "" {
+		r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
+		gothic.Logout(w, r)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logged out successfully"})
+}
+
+// GetUser returns current user info
+func (h *AuthHandler) GetUser(w http.ResponseWriter, r *http.Request) {
+	user, err := h.getUserFromRequest(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
+
+// getUserFromRequest extracts user from JWT token
+func (h *AuthHandler) getUserFromRequest(r *http.Request) (*models.User, error) {
+	// Get token from cookie
+	cookie, err := r.Cookie("auth_token")
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate token
+	claims, err := h.jwtService.ValidateToken(cookie.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find user by UUID
+	var user models.User
+	db := h.db.GormDB()
+	if err := db.Where("uuid = ?", claims.UserID).First(&user).Error; err != nil {
+		return nil, err
+	}
+
+	return &user, nil
 }

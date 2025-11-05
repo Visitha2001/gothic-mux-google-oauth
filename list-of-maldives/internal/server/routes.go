@@ -6,11 +6,16 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
+	"list-of-maldives/internal/auth"
 	"list-of-maldives/internal/server/handlers"
+	"list-of-maldives/internal/server/middleware"
+	"list-of-maldives/internal/server/models"
 	"list-of-maldives/internal/server/routes"
+
+	"github.com/gorilla/mux"
 )
 
+// server/server.go (update RegisterRoutes method)
 func (s *Server) RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
 
@@ -19,14 +24,33 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r.Use(s.requestLogger)
 
 	r.HandleFunc("/", s.HelloWorldHandler)
-
 	r.HandleFunc("/health", s.healthHandler)
+
+	// Initialize JWT service
+	jwtService := auth.NewJWTService()
+
+	// Apply auth middleware (sets user in context if authenticated)
+	r.Use(middleware.AuthMiddleware(jwtService, s.db))
 
 	// Auth routes
 	auth := r.PathPrefix("/auth").Subrouter()
-	routes.RegisterAuthRoutes(auth, handlers.NewAuthHandler(s.db))
+	routes.RegisterAuthRoutes(auth, handlers.NewAuthHandler(s.db, jwtService))
+
+	// Protected routes example
+	protected := r.PathPrefix("/api").Subrouter()
+	protected.Use(middleware.RequireAuth)
+	protected.HandleFunc("/protected", s.protectedHandler).Methods("GET")
 
 	return r
+}
+
+// Example protected handler
+func (s *Server) protectedHandler(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(middleware.UserContextKey).(*models.User)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "This is a protected route",
+		"user":    user,
+	})
 }
 
 // CORS middleware
