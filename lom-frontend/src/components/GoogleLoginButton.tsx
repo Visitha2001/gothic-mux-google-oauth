@@ -4,8 +4,8 @@ function GoogleLoginButton() {
   const loginUrl = `${GO_BACKEND_URL}/auth/google`;
 
   return (
-    <a href={loginUrl}>
-      Login with Google
+    <a href={loginUrl} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-xl">
+      <span className="text-white">Login with Google</span>
     </a>
   );
 }
