@@ -2,7 +2,6 @@
 package models
 
 import (
-	"fmt"
 	"list-of-maldives/internal/database"
 	"time"
 
@@ -72,6 +71,7 @@ func FindOrCreateByProvider(s database.Service, provider, providerID, email, nam
 			NickName:   name,
 			Provider:   provider,
 			ProviderID: providerID,
+			IsVerified: true,
 		}
 		if err = db.Create(&user).Error; err != nil {
 			return nil, err
@@ -92,45 +92,6 @@ func FindOrCreateByProvider(s database.Service, provider, providerID, email, nam
 		user.Email = email
 		user.NickName = name
 	}
-	return &user, nil
-}
-
-// FindByEmail finds a user by email
-func FindByEmail(s database.Service, email string) (*User, error) {
-	db := s.GormDB()
-	var user User
-	err := db.Where("email = ?", email).First(&user).Error
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-// CreateUser creates a new email/password user
-func CreateUser(s database.Service, email, password, nickname string) (*User, error) {
-	db := s.GormDB()
-
-	// Check if user already exists
-	var existingUser User
-	err := db.Where("email = ? AND provider = 'email'", email).First(&existingUser).Error
-	if err == nil {
-		return nil, fmt.Errorf("user already exists")
-	} else if err != gorm.ErrRecordNotFound {
-		return nil, err
-	}
-
-	user := User{
-		Email:      email,
-		Password:   password,
-		NickName:   nickname,
-		Provider:   "email",
-		IsVerified: true,
-	}
-
-	if err := db.Create(&user).Error; err != nil {
-		return nil, err
-	}
-
 	return &user, nil
 }
 
