@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"list-of-maldives/internal/auth"
 	"list-of-maldives/internal/database"
+	"list-of-maldives/internal/server/middleware"
 	"list-of-maldives/internal/server/models"
 	"net/http"
 	"os"
@@ -251,36 +252,18 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 
 // GetUser returns current user info
 func (h *AuthHandler) GetUser(w http.ResponseWriter, r *http.Request) {
-	user, err := h.getUserFromRequest(r)
-	if err != nil {
+	user := r.Context().Value(middleware.UserContextKey)
+	if user == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
+	userObj, ok := user.(*models.User)
+	if !ok {
+		http.Error(w, "Invalid user data", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
-}
-
-// getUserFromRequest extracts user from JWT token
-func (h *AuthHandler) getUserFromRequest(r *http.Request) (*models.User, error) {
-	// Get token from cookie
-	cookie, err := r.Cookie("auth_token")
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate token
-	claims, err := h.jwtService.ValidateToken(cookie.Value)
-	if err != nil {
-		return nil, err
-	}
-
-	// Find user by UUID
-	var user models.User
-	db := h.db.GormDB()
-	if err := db.Where("uuid = ?", claims.UserID).First(&user).Error; err != nil {
-		return nil, err
-	}
-
-	return &user, nil
+	json.NewEncoder(w).Encode(userObj)
 }

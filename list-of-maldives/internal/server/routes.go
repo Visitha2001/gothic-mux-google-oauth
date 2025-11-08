@@ -10,7 +10,6 @@ import (
 	"list-of-maldives/internal/server/handlers"
 	"list-of-maldives/internal/server/middleware"
 	"list-of-maldives/internal/server/models"
-	"list-of-maldives/internal/server/routes"
 
 	"github.com/gorilla/mux"
 )
@@ -32,14 +31,31 @@ func (s *Server) RegisterRoutes() http.Handler {
 	// Apply auth middleware (sets user in context if authenticated)
 	r.Use(middleware.AuthMiddleware(jwtService, s.db))
 
-	// Auth routes
+	// Auth routes (UNPROTECTED: register, login, oauth)
+	authHandler := handlers.NewAuthHandler(s.db, jwtService)
+
+	// User Info/Protected Auth Routes (PROTECTED: /auth/me)
+	userAuth := r.PathPrefix("/auth/me").Subrouter()
+	userAuth.Use(middleware.RequireAuth)
+	userAuth.HandleFunc("", authHandler.GetUser).Methods("GET")
+
 	auth := r.PathPrefix("/auth").Subrouter()
-	routes.RegisterAuthRoutes(auth, handlers.NewAuthHandler(s.db, jwtService))
+	// Register all routes EXCEPT /me here
+	auth.HandleFunc("/{provider}/callback", authHandler.GetAuthCallback).Methods("GET", "OPTIONS")
+	auth.HandleFunc("/{provider}", authHandler.GetAuth).Methods("GET", "OPTIONS")
+	auth.HandleFunc("/register", authHandler.Register).Methods("POST", "OPTIONS")
+	auth.HandleFunc("/login", authHandler.Login).Methods("POST", "OPTIONS")
+	auth.HandleFunc("/log-out", authHandler.Logout).Methods("POST", "OPTIONS")
+
+	// Protected API routes example (already correctly protected)
+	protectedAPI := r.PathPrefix("/api").Subrouter()
+	protectedAPI.Use(middleware.RequireAuth)
+	protectedAPI.HandleFunc("/protected", s.protectedHandler).Methods("GET", "OPTIONS")
 
 	// Protected routes example
 	protected := r.PathPrefix("/api").Subrouter()
 	protected.Use(middleware.RequireAuth)
-	protected.HandleFunc("/protected", s.protectedHandler).Methods("GET")
+	protected.HandleFunc("/protected", s.protectedHandler).Methods("GET", "OPTIONS")
 
 	return r
 }
@@ -57,10 +73,13 @@ func (s *Server) protectedHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// CORS Headers
-		w.Header().Set("Access-Control-Allow-Origin", "*") // Wildcard allows all origins
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Credentials", "false") // Credentials not allowed with wildcard origins
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// You also need to add the Max-Age header for preflight caching
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 
 		// Handle preflight OPTIONS requests
 		if r.Method == http.MethodOptions {
