@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/markbates/goth/gothic"
+	"gorm.io/gorm"
 )
 
 type AuthHandler struct {
@@ -112,9 +113,29 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := models.CreateUser(h.db, req.Email, req.Password, req.Nickname)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create user: %v", err), http.StatusBadRequest)
+	db := h.db.GormDB()
+
+	// Check if user already exists
+	var existingUser models.User
+	err := db.Where("email = ? AND provider = 'email'", req.Email).First(&existingUser).Error
+	if err == nil {
+		http.Error(w, "User already exists", http.StatusBadRequest)
+		return
+	} else if err != gorm.ErrRecordNotFound {
+		http.Error(w, "Failed to check user existence", http.StatusInternalServerError)
+		return
+	}
+
+	// Create new user
+	user := models.User{
+		Email:    req.Email,
+		Password: req.Password,
+		NickName: req.Nickname,
+		Provider: "email",
+	}
+
+	if err := db.Create(&user).Error; err != nil {
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
 
@@ -138,7 +159,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	response := AuthResponse{
 		Token: token,
-		User:  user,
+		User:  &user,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -158,7 +179,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := models.FindByEmail(h.db, req.Email)
+	// Find user by email
+	db := h.db.GormDB()
+	var user models.User
+	err := db.Where("email = ?", req.Email).First(&user).Error
 	if err != nil {
 		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
 		return
@@ -194,7 +218,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	response := AuthResponse{
 		Token: token,
-		User:  user,
+		User:  &user,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
